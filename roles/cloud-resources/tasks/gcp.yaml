@@ -33,15 +33,27 @@
 #############################################################################
 
 - name: GCE Create Static IP
-  gce_eip:
-    service_account_email: "{{ gcp.service_account_email }}"
-    credentials_file: "{{ gcp.credentials_file }}"
-    project_id: "{{ gcp.project_id }}"
+  gcp_compute_address:
     name: openshift-ip
+    auth_kind: serviceaccount
+    service_account_file: "{{gcp.credentials_file}}"
+    project: "{{ gcp.project_id }}"
     region: "{{gcp.region}}"
-    state: present
   tags:
     - cloud-gcp
+  register:
+    static_address
+
+# - name: GCE Create Static IP
+#   gce_eip:
+#     service_account_email: "{{ gcp.service_account_email }}"
+#     credentials_file: "{{ gcp.credentials_file }}"
+#     project_id: "{{ gcp.project_id }}"
+#     name: openshift-ip
+#     region: "{{gcp.region}}"
+#     state: present
+#   tags:
+#     - cloud-gcp
 
 - name: GCE Create Firewall Rule to allow OpenShift Console Access
   gce_net:
@@ -55,33 +67,71 @@
     target_tags: "openshift-master"
   tags:
     - cloud-gcp
-    
+
 - name: GCE Create All In One OpenShift Node
-  gce:
-    instance_names: "{{instance_name}}"
+  gcp_compute_instance:
+    name: "{{instance_name}}"
     machine_type: "{{gcp.machine_type}}"
-    image: "{{gcp.image}}"
-    external_ip: "openshift-ip"
-    service_account_email: "{{ gcp.service_account_email }}"
-    credentials_file: "{{ gcp.credentials_file }}"
-    project_id: "{{ gcp.project_id }}"
+    auth_kind: serviceaccount
+    service_account_file: "{{gcp.credentials_file}}"
+    service_accounts:
+      - scopes:
+        - "https://www.googleapis.com/auth/logging.write"
+        - "https://www.googleapis.com/auth/monitoring"
+        - "https://www.googleapis.com/auth/compute"
+        - "https://www.googleapis.com/auth/devstorage.read_write"
+        - 'https://www.googleapis.com/auth/pubsub'
+        - 'https://www.googleapis.com/auth/trace.append'
+        email: "{{gcp.service_account_email}}"
+    project: "{{ gcp.project_id }}"
     zone: "{{gcp.zone}}"
-    disk_size: "20"
-    persistent_boot_disk: "True"
-    metadata: 
+    metadata:
       ssh-keys:
         - "{{gcp.cloud_user}}:{{ssh_public_key_metadata}}"
-    service_account_permissions:
-      - logging-write
-      - monitoring
-      - compute-rw
-      - storage-rw
-      - 'https://www.googleapis.com/auth/pubsub'
-      - 'https://www.googleapis.com/auth/trace.append'
-    tags: http-server,https-server,openshift-master
+    min_cpu_platform: "{{gcp.min_cpu_platform}}"
+    disks:
+      - auto_delete: true
+        boot: true
+        initialize_params:
+          source_image: "{{gcp.os_source_image}}"
+          disk_size_gb: "20"
+    network_interfaces:
+      - access_configs:
+        - name: "External NAT"
+          nat_ip: "{{static_address}}"
+          type: ONE_TO_ONE_NAT
+    tags:
+      items: http-server,https-server,openshift-master
   register: gce_master
   tags:
     - cloud-gcp
+
+# - name: GCE Create All In One OpenShift Node
+#   gce:
+#     instance_names: "{{instance_name}}"
+#     machine_type: "{{gcp.machine_type}}"
+#     image: "{{gcp.image}}"
+#     external_ip: "openshift-ip"
+#     service_account_email: "{{ gcp.service_account_email }}"
+#     credentials_file: "{{ gcp.credentials_file }}"
+#     project_id: "{{ gcp.project_id }}"
+#     zone: "{{gcp.zone}}"
+#     disk_size: "20"
+#     persistent_boot_disk: "True"
+#     metadata: 
+#       ssh-keys:
+#         - "{{gcp.cloud_user}}:{{ssh_public_key_metadata}}"
+#     service_account_permissions:
+#       - logging-write
+#       - monitoring
+#       - compute-rw
+#       - storage-rw
+#       - 'https://www.googleapis.com/auth/pubsub'
+#       - 'https://www.googleapis.com/auth/trace.append'
+#     tags: http-server,https-server,openshift-master
+#   register: gce_master
+#   tags:
+#     - cloud-gcp
 
 - name: GCE Create Docker Disk
   gce_pd:
@@ -100,7 +150,9 @@
 
 - name: GCP Set VM Facts
   set_fact:
-      public_ip: "{{ gce_master.instance_data[0].public_ip }}"
+    public_ip: "{{static_address.address}}"
+
+#      public_ip: "{{ gce_master.instance_data[0].public_ip }}"
 #############################################################################
 ## Write to inventory
 ##############################################################################
